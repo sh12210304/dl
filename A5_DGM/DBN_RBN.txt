@@ -1,0 +1,200 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torchvision import datasets, transforms
+from torch.utils.data import DataLoader, TensorDataset
+import matplotlib.pyplot as plt
+
+# RBM (Bernoulli visible & hidden)
+class RBM(nn.Module):
+    def __init__(self, n_visible, n_hidden):
+        super().__init__()
+        self.n_visible = n_visible
+        self.n_hidden = n_hidden
+        self.W = nn.Parameter(torch.randn(n_hidden, n_visible) * 0.01)
+        self.h_bias = nn.Parameter(torch.zeros(n_hidden))
+        self.v_bias = nn.Parameter(torch.zeros(n_visible))
+
+    def sample_h(self, v):
+        ph = torch.sigmoid(F.linear(v, self.W, self.h_bias))
+        return ph, torch.bernoulli(ph)
+
+    def sample_v(self, h):
+        pv = torch.sigmoid(F.linear(h, self.W.t(), self.v_bias))
+        return pv, torch.bernoulli(pv)
+
+    def gibbs_sample(self, v0, k=1):
+        ph0, _ = self.sample_h(v0)
+        vk = v0
+        phk = None
+        for _ in range(k):
+            h = torch.bernoulli(ph0)
+            pvk, vk = self.sample_v(h)
+            phk, _ = self.sample_h(vk)
+            ph0 = phk
+        return vk, ph0, phk
+
+# DBN Classifier
+class DBNClassifier(nn.Module):
+    def __init__(self, rbm_layers, n_classes=10):
+        super().__init__()
+        self.linears = nn.ModuleList()
+        for rbm in rbm_layers:
+            linear = nn.Linear(rbm.n_visible, rbm.n_hidden)
+            linear.weight.data = rbm.W.data.clone()
+            linear.bias.data = rbm.h_bias.data.clone()
+            self.linears.append(linear)
+        self.classifier = nn.Linear(rbm_layers[-1].n_hidden, n_classes)
+
+    def forward(self, x):
+        for linear in self.linears:
+            x = torch.sigmoid(linear(x))
+        return self.classifier(x)
+
+# Pretraining RBM
+def pretrain_rbm(rbm, data_loader, device='cpu', epochs=5, lr=0.1, k=1):
+    rbm.to(device)
+    optimizer = optim.SGD(rbm.parameters(), lr=lr, momentum=0.9)
+    for epoch in range(epochs):
+        epoch_loss = 0.0
+        n_batches = 0
+        for batch_data in data_loader:
+            if isinstance(batch_data, (list, tuple)):
+                v0 = batch_data[0]
+            else:
+                v0 = batch_data
+            v0 = v0.view(v0.size(0), -1).to(device)
+            if v0.size(0) == 0:
+                continue
+
+            ph0 = torch.sigmoid(F.linear(v0, rbm.W, rbm.h_bias))
+            h_sample = torch.bernoulli(ph0)
+            vk = v0
+            phk = None
+            for _ in range(k):
+                pvk = torch.sigmoid(F.linear(h_sample, rbm.W.t(), rbm.v_bias))
+                vk = torch.bernoulli(pvk)
+                phk = torch.sigmoid(F.linear(vk, rbm.W, rbm.h_bias))
+                h_sample = torch.bernoulli(phk)
+
+            positive_grad = torch.matmul(ph0.t(), v0)
+            negative_grad = torch.matmul(phk.t(), vk)
+            batch_size = v0.size(0)
+            grad_W = (positive_grad - negative_grad) / batch_size
+            grad_vb = torch.mean(v0 - vk, dim=0)
+            grad_hb = torch.mean(ph0 - phk, dim=0)
+
+            optimizer.zero_grad()
+            rbm.W.grad = -grad_W
+            rbm.v_bias.grad = -grad_vb
+            rbm.h_bias.grad = -grad_hb
+            optimizer.step()
+
+            epoch_loss += torch.mean((v0 - vk) ** 2).item()
+            n_batches += 1
+
+        print(f"RBM epoch {epoch+1}/{epochs}, recon_loss: {epoch_loss / n_batches:.6f}")
+
+# Supervised fine-tuning
+def train_dbn_supervised(dbn, train_loader, test_loader, device='cpu', epochs=10, lr=1e-3):
+    dbn.to(device)
+    optimizer = optim.Adam(dbn.parameters(), lr=lr)
+    criterion = nn.CrossEntropyLoss()
+    for epoch in range(epochs):
+        dbn.train()
+        total_loss = 0.0
+        for imgs, labels in train_loader:
+            imgs = imgs.view(imgs.size(0), -1).to(device)
+            labels = labels.to(device)
+            logits = dbn(imgs)
+            loss = criterion(logits, labels)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        acc = evaluate_dbn(dbn, test_loader, device)
+        print(f"Supervised epoch {epoch+1}/{epochs}, loss={total_loss/len(train_loader):.6f}, test_acc={acc*100:.2f}%")
+
+# Evaluation
+def evaluate_dbn(dbn, data_loader, device='cpu'):
+    dbn.eval()
+    correct, total = 0, 0
+    with torch.no_grad():
+        for imgs, labels in data_loader:
+            imgs = imgs.view(imgs.size(0), -1).to(device)
+            labels = labels.to(device)
+            logits = dbn(imgs)
+            preds = logits.argmax(dim=1)
+            correct += (preds == labels).sum().item()
+            total += labels.size(0)
+    return correct / total if total > 0 else 0.0
+
+# Prediction + display
+def predict_and_show(dbn, test_loader, device='cpu', num_samples=5):
+    dbn.eval()
+    imgs_shown = 0
+    with torch.no_grad():
+        for imgs, labels in test_loader:
+            imgs = imgs.view(imgs.size(0), -1).to(device)
+            logits = dbn(imgs)
+            preds = logits.argmax(dim=1).cpu().numpy()
+            imgs = imgs.view(-1, 1, 28, 28).cpu().numpy()
+            for i in range(len(imgs)):
+                plt.imshow(imgs[i][0], cmap="gray")
+                plt.title(f"Predicted: {preds[i]}, True: {labels[i].item()}")
+                plt.axis("off")
+                plt.show()
+                imgs_shown += 1
+                if imgs_shown >= num_samples:
+                    return
+
+# Main
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print("Device:", device)
+
+    batch_size = 128
+    transform = transforms.Compose([transforms.ToTensor()])
+    train_ds = datasets.MNIST(root="./data", train=True, download=True, transform=transform)
+    test_ds  = datasets.MNIST(root="./data", train=False, download=True, transform=transform)
+
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    test_loader  = DataLoader(test_ds, batch_size=1000, shuffle=False)
+
+    rbm1 = RBM(n_visible=28*28, n_hidden=512)
+    rbm2 = RBM(n_visible=512, n_hidden=256)
+
+    print("\nPretraining RBM 1/2")
+    pretrain_rbm(rbm1, train_loader, device=device, epochs=5, lr=0.1, k=1)
+
+    features = []
+    with torch.no_grad():
+        for imgs, _ in train_loader:
+            v = imgs.view(imgs.size(0), -1).to(device)
+            ph = torch.sigmoid(F.linear(v, rbm1.W, rbm1.h_bias))
+            features.append(ph.cpu())
+    features = torch.cat(features, dim=0)
+
+    rbm2_dataset = TensorDataset(features)
+    rbm2_loader = DataLoader(rbm2_dataset, batch_size=batch_size, shuffle=True)
+
+    print("\nPretraining RBM 2/2")
+    pretrain_rbm(rbm2, rbm2_loader, device=device, epochs=5, lr=0.1, k=1)
+
+    dbn = DBNClassifier([rbm1, rbm2], n_classes=10)
+    print("\nStarting supervised fine-tuning of DBN")
+    train_dbn_supervised(dbn, train_loader, test_loader, device=device, epochs=8, lr=1e-3)
+
+    final_acc = evaluate_dbn(dbn, test_loader, device=device)
+    print(f"\nFinal Test Accuracy: {final_acc*100:.2f}%")
+
+    print("\nPredictions on sample images:")
+    predict_and_show(dbn, test_loader, device=device, num_samples=10)
+    # After training
+    score = evaluate_dbn(dbn, test_loader, device=device)
+    print("DBN Test Accuracy (score):", score)
+
+
+if __name__ == "__main__":
+    main()

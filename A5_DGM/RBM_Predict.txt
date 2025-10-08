@@ -1,0 +1,226 @@
+#Q2
+import os
+import urllib.request
+import zipfile
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, TensorDataset
+from tqdm import tqdm
+import random
+
+# Download MovieLens 100K if needed
+ML_URL = "http://files.grouplens.org/datasets/movielens/ml-100k.zip"
+DATA_DIR = "ml-100k"
+
+if not os.path.exists(DATA_DIR):
+    print("Downloading MovieLens 100K dataset...")
+    zip_path = "ml-100k.zip"
+    urllib.request.urlretrieve(ML_URL, zip_path)
+    with zipfile.ZipFile(zip_path, 'r') as z:
+        z.extractall(".")
+    os.remove(zip_path)
+    print("Downloaded and extracted ml-100k.")
+
+# Load ratings and create user-item matrix
+# Ratings file format: user id | item id | rating | timestamp
+ratings_path = os.path.join(DATA_DIR, "u.data")
+ratings = pd.read_csv(ratings_path, sep="\t", header=None,
+                      names=["user_id", "item_id", "rating", "timestamp"])
+
+n_users = ratings.user_id.nunique()
+n_items = ratings.item_id.nunique()
+print(f"Users: {n_users}, Items: {n_items}")
+
+# Convert to 0-indexed user/item
+ratings["user_id"] -= 1
+ratings["item_id"] -= 1
+
+# Binarize: liked = rating >= 4
+ratings["liked"] = (ratings["rating"] >= 4).astype(int)
+
+# Build per-user lists of (item,liked)
+user_group = ratings.groupby("user_id").apply(lambda df: df[["item_id", "liked"]].values.tolist())
+user_ratings = {u: [(int(it), int(l)) for it, l in vals] for u, vals in user_group.items()}
+
+
+# Create train/test split (leave-one-out): for each user keep 1 known rating for test
+train_matrix = np.zeros((n_users, n_items), dtype=np.float32)  # 1 = liked, 0 = unknown/not liked
+test_pairs = []  # (user, item, liked)
+
+random.seed(42)
+for u in range(n_users):
+    items = user_ratings[u]
+    # choose one rated item for test (if user has at least 1 rating)
+    if len(items) == 0:
+        continue
+    test_idx = random.randrange(len(items))
+    for i, (item, liked) in enumerate(items):
+        if i == test_idx:
+            test_pairs.append((u, item, liked))
+        else:
+            # Keep only positive (liked) signals in training matrix to model implicit feedback
+            if liked == 1:
+                train_matrix[u, item] = 1.0
+
+# train_matrix will not include negative signals explicitly; unknowns remain 0.
+print(f"Train matrix shape: {train_matrix.shape}, Test pairs: {len(test_pairs)}")
+
+
+#  RBM Model (binary visible, binary hidden)
+class RBM(nn.Module):
+    def __init__(self, n_visible, n_hidden):
+        super().__init__()
+        self.n_visible = n_visible
+        self.n_hidden = n_hidden
+        # Parameters
+        self.W = nn.Parameter(torch.randn(n_hidden, n_visible) * 0.01)
+        self.h_bias = nn.Parameter(torch.zeros(n_hidden))
+        self.v_bias = nn.Parameter(torch.zeros(n_visible))
+
+    def sample_h(self, v):
+        # v: (batch, n_visible) values in [0,1]
+        wx = F.linear(v, self.W, self.h_bias)  # (batch, n_hidden)
+        ph = torch.sigmoid(wx)
+        return ph, torch.bernoulli(ph)
+
+    def sample_v(self, h):
+        wx = F.linear(h, self.W.t(), self.v_bias)  # (batch, n_visible)
+        pv = torch.sigmoid(wx)
+        return pv, torch.bernoulli(pv)
+
+    def forward(self, v0, k=1):
+        # Contrastive Divergence CD-k
+        v = v0
+        ph0, h = self.sample_h(v)
+        for _ in range(k):
+            pv, v = self.sample_v(h)
+            ph, h = self.sample_h(v)
+        return v, ph0, ph, pv
+
+    def free_energy(self, v):
+        vbias_term = torch.matmul(v, self.v_bias)
+        wx_b = F.linear(v, self.W.t(), self.h_bias)  # (batch, n_hidden)
+        hidden_term = torch.sum(torch.log1p(torch.exp(wx_b)), dim=1)
+        return -vbias_term - hidden_term
+
+
+# Training Setup
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+n_visible = n_items
+n_hidden = 128
+rbm = RBM(n_visible=n_visible, n_hidden=n_hidden).to(device)
+
+# Create DataLoader from train_matrix rows (each user is a training example)
+X_train = torch.tensor(train_matrix, dtype=torch.float32)
+train_loader = DataLoader(TensorDataset(X_train), batch_size=64, shuffle=True)
+
+optimizer = torch.optim.SGD(rbm.parameters(), lr=0.1, momentum=0.9)
+epochs = 15
+k = 1  # CD-1
+
+print("Training RBM...")
+for epoch in range(epochs):
+    epoch_loss = 0.0
+    for batch_tuple in train_loader:
+        v0 = batch_tuple[0].to(device)
+        # skip users with all zeros (no positive training signals)
+        if v0.sum(dim=1).eq(0).all():
+            continue
+
+        # Positive phase
+        ph0, _ = rbm.sample_h(v0)
+        # Negative phase via CD-k
+        vk = v0.clone()
+        phk = None
+        for _ in range(k):
+            pvk, hk = rbm.sample_v(torch.bernoulli(ph0))
+            phk, _ = rbm.sample_h(pvk)
+            vk = pvk
+
+        # Compute gradients via CD
+        # dW ~ <v0 * ph0> - <vk * phk>
+        positive_grad = torch.matmul(ph0.t(), v0)  # (n_hidden, n_visible)
+        negative_grad = torch.matmul(phk.t(), vk)
+
+        # Parameter updates (manual)
+        batch_size = v0.size(0)
+        grad_W = (positive_grad - negative_grad) / batch_size
+        grad_vb = torch.mean(v0 - vk, dim=0)
+        grad_hb = torch.mean(ph0 - phk, dim=0)
+
+        # Apply gradients (SGD step)
+        optimizer.zero_grad()
+        # Manually set gradients on parameters
+        rbm.W.grad = -grad_W  # negative because optimizer does gradient descent
+        rbm.v_bias.grad = -grad_vb
+        rbm.h_bias.grad = -grad_hb
+        optimizer.step()
+
+        # track reconstruction loss
+        epoch_loss += torch.mean((v0 - vk) ** 2).item()
+
+    print(f"Epoch {epoch+1}/{epochs}, Loss: {epoch_loss/len(train_loader):.6f}")
+
+print("Training done.")
+
+# Prediction / Recommendation
+# For each test pair (user, item, liked), we compute probabilities for all items
+# given the user's visible vector and then rank items. Evaluate whether held-out item is in top-K.
+def recommend_for_user(rbm_model, user_vector, top_k=10, device='cpu'):
+    """
+    user_vector: 1D numpy array or tensor of size n_items with training-known positives =1, else 0
+    Returns top_k item indices ordered by reconstructed probability (descending).
+    """
+    rbm_model.eval()
+    with torch.no_grad():
+        v = torch.tensor(user_vector.reshape(1, -1), dtype=torch.float32).to(device)
+        # compute hidden probabilities
+        ph, _ = rbm_model.sample_h(v)
+        # compute visible probabilities from ph
+        pv = torch.sigmoid(F.linear(ph, rbm_model.W.t(), rbm_model.v_bias))
+        probs = pv.cpu().numpy().flatten()
+    # mask already-known training positives
+    probs_masked = probs.copy()
+    probs_masked[user_vector == 1] = -1.0  # exclude known positives from recommendation
+    top_items = np.argsort(-probs_masked)[:top_k]
+    return top_items, probs
+
+# Evaluate hit-rate @ K and precision@K
+K = 10
+hits = 0
+precision_sum = 0.0
+num_evaluated = 0
+
+for (u, item, liked) in test_pairs:
+    user_vec = train_matrix[u].copy()  # use train vector (without the test item)
+    top_items, probs = recommend_for_user(rbm, user_vec, top_k=K, device=device)
+    num_evaluated += 1
+    # Hit if held-out test item is in top-K
+    if item in top_items:
+        hits += 1
+    # Precision: fraction of top-K that are actual liked items in original full data
+    # For that, we check original ratings list
+    actual_likes = {it for it, l in user_ratings[u] if l == 1}
+    prec_k = len([i for i in top_items if i in actual_likes]) / K
+    precision_sum += prec_k
+
+hit_rate = hits / num_evaluated
+mean_precision = precision_sum / num_evaluated
+print(f"Evaluation (leave-one-out) over {num_evaluated} users: HitRate@{K} = {hit_rate:.4f}, Precision@{K} = {mean_precision:.4f}")
+
+
+# Show a small example recommendation
+uid = 10
+user_vec = train_matrix[uid]
+top_items, probs = recommend_for_user(rbm, user_vec, top_k=10, device=device)
+print(f"Top-10 recommended item IDs for user {uid}: {top_items}")
+# You can map item IDs to movie titles using u.item if desired
+item_titles = pd.read_csv(os.path.join(DATA_DIR, "u.item"), sep="|", header=None, encoding='latin-1', usecols=[0,1], names=['id','title'])
+mapping = {int(row[0])-1: row[1] for idx,row in item_titles.iterrows()}
+print("Top-10 movie titles (if available):")
+for it in top_items:
+    print(mapping.get(it, f"Item {it}"))
