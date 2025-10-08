@@ -1,0 +1,139 @@
+#q1
+import torch
+import torch.nn as nn
+import torchvision
+import torchvision.transforms as transforms
+from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
+from collections import Counter
+import numpy as np
+
+# -------------------------------
+# Step 1: Load MNIST dataset
+# -------------------------------
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Lambda(lambda x: x.view(-1))  # flatten 28x28 image to 784
+])
+
+train_dataset = torchvision.datasets.MNIST(root='./data', train=True, transform=transform, download=True)
+test_dataset = torchvision.datasets.MNIST(root='./data', train=False, transform=transform, download=True)
+
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+
+# -------------------------------
+# Step 2: Explore dataset
+# -------------------------------
+print("Number of training samples:", len(train_dataset))
+print("Number of test samples:", len(test_dataset))
+
+# Plot some real images
+examples = iter(train_loader)
+example_data, example_targets = next(examples)  # corrected
+
+plt.figure(figsize=(12,6))
+for i in range(12):
+    plt.subplot(3,4,i+1)
+    plt.imshow(example_data[i].view(28,28), cmap='gray')
+    plt.title(f"Label: {example_targets[i]}")
+    plt.axis('off')
+plt.suptitle("Sample Real MNIST Images")
+plt.show()
+
+# -------------------------------
+# Step 3: Define RBM
+# -------------------------------
+class RBM(nn.Module):
+    def __init__(self, n_vis=784, n_hid=256):
+        super(RBM, self).__init__()
+        self.W = nn.Parameter(torch.randn(n_hid, n_vis) * 0.01)
+        self.h_bias = nn.Parameter(torch.zeros(n_hid))
+        self.v_bias = nn.Parameter(torch.zeros(n_vis))
+
+    def sample_h(self, v):
+        prob = torch.sigmoid(torch.matmul(v, self.W.t()) + self.h_bias)
+        return prob, torch.bernoulli(prob)
+
+    def sample_v(self, h):
+        prob = torch.sigmoid(torch.matmul(h, self.W) + self.v_bias)
+        return prob, torch.bernoulli(prob)
+
+    def forward(self, v):
+        h_prob, h_sample = self.sample_h(v)
+        v_prob, v_sample = self.sample_v(h_sample)
+        return v_prob, v_sample
+
+# -------------------------------
+# Step 4: Train RBM
+# -------------------------------
+rbm = RBM(n_vis=784, n_hid=256)
+optimizer = torch.optim.SGD(rbm.parameters(), lr=0.1)
+n_epochs = 20
+
+for epoch in range(n_epochs):
+    epoch_loss = 0
+    for batch, _ in train_loader:
+        batch = batch.bernoulli()  # binarize input
+        v0 = batch
+        h0_prob, h0 = rbm.sample_h(v0)
+        v1_prob, v1 = rbm.sample_v(h0)
+        h1_prob, h1 = rbm.sample_h(v1)
+
+        # Contrastive Divergence loss
+        loss = torch.mean((v0 - v1_prob)**2)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        epoch_loss += loss.item()
+    print(f"Epoch {epoch+1}/{n_epochs}, Loss: {epoch_loss/len(train_loader):.4f}")
+
+# -------------------------------
+# Step 5 & 6: Original, Reconstructed, and Generated Images
+# -------------------------------
+
+rbm.eval()
+test_examples, _ = next(iter(test_loader))  # get one batch of test images
+test_examples = test_examples.bernoulli()   # binarize
+
+n_images = 12  # number of images to display
+plt.figure(figsize=(18, 6))
+
+for i in range(n_images):
+    # ---------- Original ----------
+    original = test_examples[i].view(28, 28)
+
+    # ---------- Reconstructed ----------
+    v = test_examples[i].unsqueeze(0)  # shape [1, 784]
+    for _ in range(100):  # Gibbs sampling
+        _, v = rbm(v)
+    reconstructed = v.view(28, 28).detach()
+
+    # ---------- Generated from random ----------
+    v_gen = torch.bernoulli(torch.rand(1, 784))  # random noise
+    for _ in range(100):
+        _, v_gen = rbm(v_gen)
+    generated = v_gen.view(28, 28).detach()
+
+    # Plot original
+    plt.subplot(3, n_images, i+1)
+    plt.imshow(original, cmap='gray')
+    if i == 0: plt.ylabel("Original", fontsize=12)
+    plt.axis('off')
+
+    # Plot reconstructed
+    plt.subplot(3, n_images, n_images + i + 1)
+    plt.imshow(reconstructed, cmap='gray')
+    if i == 0: plt.ylabel("Reconstructed", fontsize=12)
+    plt.axis('off')
+
+    # Plot generated
+    plt.subplot(3, n_images, 2*n_images + i + 1)
+    plt.imshow(generated, cmap='gray')
+    if i == 0: plt.ylabel("Generated", fontsize=12)
+    plt.axis('off')
+
+plt.suptitle("Original vs RBM-Reconstructed vs RBM-Generated MNIST Images")
+plt.show()
+
