@@ -1,0 +1,95 @@
+#q3.)
+import numpy as np
+
+def step_activation(x):
+    return 1 if x >= 0 else 0
+
+def train_perceptron_or_gate(learning_rate=0.1, max_iterations=10):
+    # Input for OR gate
+    X = np.array([
+        [0, 0],
+        [0, 1],
+        [1, 0],
+        [1, 1]
+    ])
+    y = np.array([0, 1, 1, 1])  # Output for OR gate
+
+    # Initialize weights
+    weights = np.array([0.6, 0.6])
+
+    print("Initial Weights:", np.round(weights, 4))
+    print("-" * 50)
+
+    iteration = 0
+    # Training loop continues until convergence or max_iterations
+    while iteration < max_iterations:
+        total_error = 0
+        iteration += 1
+        print(f"\n--- Iteration {iteration}/{max_iterations} ---")
+        # Iterate over each training example
+        for i in range(X.shape[0]):
+            input_vector = X[i]
+            true_output = y[i]
+
+            # Calculate the weighted sum (net input)
+            weighted_sum = np.dot(input_vector, weights)
+
+            # Apply the activation function to get the predicted output
+            predicted_output = step_activation(weighted_sum)
+
+            # Calculate the error
+            error = true_output - predicted_output
+            total_error += abs(error)  # Accumulate absolute error for convergence check
+
+            print(f"  Input: {input_vector}, True Output: {true_output}, Predicted Output: {predicted_output}")
+            print(f"    Weighted Sum: {np.round(weighted_sum, 4)}, Error: {error}")
+
+            # Store old weights for printing update
+            old_weights = np.copy(weights)
+
+            # Update weights using the Perceptron Learning Rule
+            weights = weights + learning_rate * error * input_vector
+
+            if error != 0:
+                print(f"    Updating weights: {np.round(old_weights, 4)} + {learning_rate} * {error} * {input_vector} = {np.round(weights, 4)}")
+            else:
+                print("    No update needed (error is 0).")
+
+        print(f"Iteration {iteration} Summary: Total Error = {total_error:.2f}")
+
+        # Check for convergence: if total_error is 0, all samples are correctly classified
+        if total_error == 0:
+            print(f"\nConverged after {iteration} iterations!")
+            break
+    else:
+        print("\nTraining finished. Did not converge perfectly within the given max iterations.")
+
+    print("\nFinal Trained Weights:", np.round(weights, 4))
+    print("-" * 50)
+
+    return weights
+
+def test_perceptron_or_gate(weights):
+    print("Testing Trained Perceptron for OR Gate:")
+    test_inputs = np.array([
+        [0, 0],
+        [0, 1],
+        [1, 0],
+        [1, 1]
+    ])
+
+    for input_vec in test_inputs:
+        weighted_sum = np.dot(input_vec, weights)
+        prediction = step_activation(weighted_sum)
+
+        expected_or_output = 1 if (input_vec[0] == 1 or input_vec[1] == 1) else 0
+        print(f"Input: {input_vec}, Predicted Output: {prediction} (Expected: {expected_or_output})")
+
+
+if __name__ == "__main__":
+    trained_weights = train_perceptron_or_gate(learning_rate=0.1, max_iterations=10)
+    test_perceptron_or_gate(trained_weights)
+
+
+
+
