@@ -1,0 +1,109 @@
+#Q2 SETB
+import tensorflow as tf
+from tensorflow.keras.datasets import mnist
+from tensorflow.keras.utils import to_categorical
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Step 1: Load and Explore MNIST Dataset
+(x_train, y_train), (x_test, y_test) = mnist.load_data()
+
+print("✅ MNIST Dataset Loaded")
+print(f"Training set shape: {x_train.shape} | Labels: {y_train.shape}")
+print(f"Test set shape: {x_test.shape} | Labels: {y_test.shape}")
+print(f"Pixel value range: {x_train.min()} to {x_train.max()}")
+
+# Class distribution
+unique, counts = np.unique(y_train, return_counts=True)
+class_distribution = dict(zip(unique, counts))
+print("\n📊 Class Distribution in Training Data:")
+for digit, count in class_distribution.items():
+    print(f"Digit {digit}: {count} samples")
+
+# Visualize sample digits
+plt.figure(figsize=(10, 5))
+for i in range(10):
+    plt.subplot(2, 5, i+1)
+    plt.imshow(x_train[i], cmap='gray')
+    plt.title(f"Label: {y_train[i]}")
+    plt.axis('off')
+plt.suptitle("🔍 Sample Images from MNIST", fontsize=16)
+plt.tight_layout()
+plt.show()
+
+# Step 2: Preprocess the data
+# Normalize to range [0, 1]
+x_train = x_train / 255.0
+x_test = x_test / 255.0
+
+# One-hot encode labels
+y_train_cat = to_categorical(y_train, 10)
+y_test_cat = to_categorical(y_test, 10)
+
+# Step 3: Build RNN model
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import SimpleRNN, Dense
+
+model = Sequential([
+    SimpleRNN(128, input_shape=(28, 28), activation='tanh'),
+    Dense(64, activation='relu'),
+    Dense(10, activation='softmax')
+])
+
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+model.summary()
+
+# Step 4: Train the model
+history = model.fit(
+    x_train, y_train_cat,
+    epochs=10,
+    batch_size=128,
+    validation_split=0.2,
+    verbose=2
+)
+
+# Step 5: Evaluate the model
+test_loss, test_acc = model.evaluate(x_test, y_test_cat)
+print(f"\n✅ Test Accuracy: {test_acc:.4f}")
+print(f"❌ Test Loss: {test_loss:.4f}")
+
+# Step 6: Plot accuracy and loss
+plt.figure(figsize=(12, 5))
+
+# Accuracy
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'], label="Train Accuracy")
+plt.plot(history.history['val_accuracy'], label="Validation Accuracy")
+plt.title("📈 Accuracy vs Epochs")
+plt.xlabel("Epoch")
+plt.ylabel("Accuracy")
+plt.legend()
+
+# Loss
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'], label="Train Loss")
+plt.plot(history.history['val_loss'], label="Validation Loss")
+plt.title("📉 Loss vs Epochs")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.legend()
+
+plt.tight_layout()
+plt.show()
+
+# Step 7: Predict and visualize test samples
+def predict_and_visualize(index):
+    image = x_test[index]
+    true_label = y_test[index]
+    prediction = model.predict(image.reshape(1, 28, 28))
+    predicted_label = np.argmax(prediction)
+
+    plt.imshow(image, cmap='gray')
+    plt.title(f"True: {true_label} | Predicted: {predicted_label}")
+    plt.axis('off')
+    plt.show()
+
+# Try a few predictions
+for i in [0, 1, 2, 3, 4]:
+    predict_and_visualize(i)

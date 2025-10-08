@@ -1,0 +1,126 @@
+#setb q1
+import tensorflow as tf
+import tensorflow_datasets as tfds
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, SimpleRNN, Bidirectional, Dense
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Step 1: Load and Explore the Dataset
+print("🔄 Loading dataset...")
+ds, info = tfds.load("sentiment140", with_info=True, as_supervised=False)
+train_ds = ds["train"]
+
+# Show dataset info
+print("\n📊 Dataset Info:")
+print(info)
+
+# Show a sample tweet and sentiment
+for sample in train_ds.take(1):
+    print("\n🔎 Sample Tweet:")
+    print("Tweet:", sample["text"].numpy().decode("utf-8"))
+    print("Sentiment (0=neg, 2=neutral, 4=pos):", sample["polarity"].numpy())
+
+# Step 2: Filter out neutral tweets and map labels to 0 or 1
+def filter_neutral(example):
+    return tf.logical_or(tf.equal(example['polarity'], 0), tf.equal(example['polarity'], 4))
+
+def map_label(example):
+    text = example['text']
+    label = tf.where(example['polarity'] == 4, 1, 0)
+    return text, label
+
+filtered_ds = train_ds.filter(filter_neutral).map(map_label)
+
+# Step 3: Extract and shuffle half of the dataset (~800,000 examples)
+LIMIT = 800_000
+texts = []
+labels = []
+
+print("\n🔄 Processing tweets...")
+for text, label in filtered_ds.take(LIMIT):
+    texts.append(text.numpy().decode("utf-8"))
+    labels.append(label.numpy())
+
+# Shuffle data
+indices = np.arange(len(texts))
+np.random.shuffle(indices)
+texts = [texts[i] for i in indices]
+labels = [labels[i] for i in indices]
+
+# Step 4: Split into training and validation sets
+split_index = int(0.8 * len(texts))
+texts_train, texts_val = texts[:split_index], texts[split_index:]
+labels_train, labels_val = labels[:split_index], labels[split_index:]
+
+# Step 5: Tokenization and padding
+vocab_size = 20000
+maxlen = 50
+tokenizer = Tokenizer(num_words=vocab_size, oov_token="<OOV>")
+tokenizer.fit_on_texts(texts_train)
+
+x_train = tokenizer.texts_to_sequences(texts_train)
+x_val = tokenizer.texts_to_sequences(texts_val)
+
+x_train = pad_sequences(x_train, maxlen=maxlen, padding="post", truncating="post")
+x_val = pad_sequences(x_val, maxlen=maxlen, padding="post", truncating="post")
+y_train = np.array(labels_train)
+y_val = np.array(labels_val)
+
+# Step 6: Build Bidirectional RNN Model
+print("\n Building Bidirectional RNN model...")
+model = Sequential([
+    Embedding(vocab_size, 64, input_length=maxlen),
+    Bidirectional(SimpleRNN(64)),
+    Dense(1, activation='sigmoid')
+])
+
+model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+model.summary()
+
+# Step 7: Train the Model (Epochs = 20)
+print("\n Training model...")
+history = model.fit(
+    x_train, y_train,
+    epochs=5,
+    batch_size=128,
+    validation_data=(x_val, y_val)
+)
+
+# Step 8: Plot Accuracy and Loss vs Epochs
+print("\n📈 Plotting performance...")
+plt.figure(figsize=(12, 5))
+
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'], label="Train Accuracy")
+plt.plot(history.history['val_accuracy'], label="Validation Accuracy")
+plt.title("Accuracy over Epochs")
+plt.xlabel("Epoch")
+plt.ylabel("Accuracy")
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'], label="Train Loss")
+plt.plot(history.history['val_loss'], label="Validation Loss")
+plt.title("Loss over Epochs")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.legend()
+
+plt.tight_layout()
+plt.show()
+
+# Step 9: Predict sentiment of a user input sentence
+def predict_sentiment(text):
+    sequence = tokenizer.texts_to_sequences([text])
+    padded = pad_sequences(sequence, maxlen=maxlen, padding='post', truncating='post')
+    probability = model.predict(padded)[0][0]
+    sentiment = "Positive 😊" if probability >= 0.5 else "Negative 😞"
+    print(f"\n📝 Sentence: {text}")
+    print(f"🔮 Predicted Sentiment: {sentiment} (Confidence: {probability:.2f})")
+
+# Try example inputs
+predict_sentiment("I really love this movie, it's fantastic!")
+predict_sentiment("This is the worst service I've ever experienced.")

@@ -1,0 +1,59 @@
+#SetA Q4
+
+import numpy as np
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, LSTM, Dense
+
+
+vocab_size = 10000   # number of unique integers
+embedding_dim = 64   # embedding dimension
+seq_length = 50      # sequence length
+lstm_units = 128     # LSTM units
+
+
+num_sequences = 1000
+X = np.random.randint(0, vocab_size, size=(num_sequences, seq_length))
+y = np.random.randint(0, 2, size=(num_sequences, 1))  # binary labels
+
+model = Sequential([
+    Embedding(input_dim=vocab_size, output_dim=embedding_dim, input_length=seq_length),
+    LSTM(lstm_units),
+    Dense(1, activation='sigmoid')
+])
+
+model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+model.summary()
+
+
+history = model.fit(X, y, epochs=20, batch_size=32, validation_split=0.2)
+
+
+plt.figure(figsize=(12,5))
+
+# Loss plot
+plt.subplot(1,2,1)
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.title('Loss vs Epochs')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+
+# Accuracy plot
+plt.subplot(1,2,2)
+plt.plot(history.history['accuracy'], label='Training Accuracy')
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+plt.title('Accuracy vs Epochs')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend()
+
+plt.show()
+
+
+final_train_acc = history.history['accuracy'][-1]
+final_val_acc = history.history['val_accuracy'][-1]
+print(f"Final Training Accuracy: {final_train_acc*100:.2f}%")
+print(f"Final Validation Accuracy: {final_val_acc*100:.2f}%")

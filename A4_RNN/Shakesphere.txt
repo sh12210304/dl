@@ -1,0 +1,147 @@
+
+# rnn_shakespeare_integer_embedding.py
+import tensorflow as tf
+from tensorflow.keras import layers, models, optimizers
+import numpy as np
+import os
+import matplotlib.pyplot as plt
+
+# -------------------------------
+# Step 1: Download and load text
+# -------------------------------
+path_to_file = 'shakespeare.txt'
+if not os.path.exists(path_to_file):
+    !wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt -O shakespeare.txt
+
+with open(path_to_file, 'r', encoding='utf-8') as f:
+    text = f.read()
+
+print("Length of text:", len(text))
+print("First 250 characters:\n", text[:250])
+
+# Unique characters
+vocab = sorted(set(text))
+print("Total unique characters:", len(vocab))
+
+# Create char <-> int mappings
+char2idx = {c:i for i,c in enumerate(vocab)}
+idx2char = np.array(vocab)
+
+# Show first 13 characters mapping
+first_13 = text[:13]
+print("First 13 characters:", first_13)
+print("Mapped to integers:", [char2idx[c] for c in first_13])
+
+# -------------------------------
+# Step 2: Prepare sequences
+# -------------------------------
+maxlen = 50  # smaller sequence length for memory
+step = 3
+sentences = []
+next_chars = []
+
+for i in range(0, len(text)-maxlen, step):
+    sentences.append(text[i:i+maxlen])
+    next_chars.append(text[i+maxlen])
+
+print("Number of sequences:", len(sentences))
+print("Example input:", sentences[0])
+print("Example target:", next_chars[0])
+
+# Integer encoding
+x_int = np.array([[char2idx[c] for c in sentence] for sentence in sentences], dtype=np.int32)
+y_int = np.array([char2idx[c] for c in next_chars], dtype=np.int32)
+
+# Create tf.data dataset
+batch_size = 64
+dataset = tf.data.Dataset.from_tensor_slices((x_int, y_int))
+dataset = dataset.shuffle(10000).batch(batch_size, drop_remainder=True)
+
+# -------------------------------
+# Step 3: Build RNN model (GRU + Embedding)
+# -------------------------------
+model = models.Sequential([
+    layers.Input(shape=(maxlen,)),
+    layers.Embedding(input_dim=len(vocab), output_dim=64),
+    layers.GRU(256, activation='relu'),
+    layers.Dense(len(vocab), activation='softmax')
+])
+
+model.compile(optimizer=optimizers.Adam(0.001),
+              loss='sparse_categorical_crossentropy')
+
+model.summary()
+
+# -------------------------------
+# Step 4: Checkpoints
+# -------------------------------
+checkpoint_dir = './checkpoints'
+os.makedirs(checkpoint_dir, exist_ok=True)
+checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt_{epoch}.keras")
+
+checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
+    filepath=checkpoint_prefix,
+    save_weights_only=False,  # save full model
+    save_freq='epoch'
+)
+
+# -------------------------------
+# Step 5: Train the model
+# -------------------------------
+epochs = 5
+history = model.fit(dataset, epochs=epochs, callbacks=[checkpoint_callback])
+
+# Plot training loss
+plt.figure(figsize=(6,4))
+plt.plot(history.history['loss'], marker='o')
+plt.title("Training Loss")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.grid(True)
+plt.show()
+
+# -------------------------------
+# Step 6: Text generation
+# -------------------------------
+def sample(preds, temperature=1.0):
+    preds = np.asarray(preds).astype('float64')
+    preds = np.log(preds + 1e-8) / temperature
+    exp_preds = np.exp(preds)
+    preds = exp_preds / np.sum(exp_preds)
+    return np.random.choice(len(preds), p=preds)
+
+# Restore last checkpoint
+latest_ckpt = tf.train.latest_checkpoint(checkpoint_dir)
+
+if latest_ckpt:
+    model.load_weights(latest_ckpt)
+else:
+    print("No checkpoint found. Starting text generation with the trained model from the last epoch.")
+
+
+num_generate = 1000
+start_index = np.random.randint(0, len(text)-maxlen-1)
+generated_text = text[start_index:start_index+maxlen]
+print("Seed text:", generated_text)
+
+for _ in range(num_generate):
+    sampled = np.array([[char2idx[c] for c in generated_text[-maxlen:]]])
+    preds = model.predict(sampled, verbose=0)[0]
+    next_index = sample(preds, temperature=1.0)
+    next_char = idx2char[next_index]
+    generated_text += next_char
+
+print("Generated text:\n", generated_text)
+
+# -------------------------------
+# Step 7: Optional: character distribution in generated text
+# -------------------------------
+char_counts = [generated_text.count(c) for c in vocab]
+plt.figure(figsize=(12,4))
+plt.bar(vocab, char_counts)
+plt.title("Character distribution in generated text")
+plt.xlabel("Character")
+plt.ylabel("Count")
+plt.show()
+
+

@@ -1,0 +1,139 @@
+#setA Q3
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import yfinance as yf  # pip install yfinance
+
+# --- Step 1: Download Mastercard stock data from Yahoo Finance ---
+ticker = "MA"  # Mastercard's ticker symbol
+df = yf.download(ticker, start="2010-01-01", end="2024-01-01")
+
+print(df.head())
+
+# Use 'Close' price for prediction
+close_prices = df['Close'].values.reshape(-1,1)
+
+# --- Step 2: Data normalization ---
+scaler = MinMaxScaler()
+close_prices_norm = scaler.fit_transform(close_prices)
+
+# --- Step 3: Create sequences for time series forecasting ---
+def create_sequences(data, seq_length):
+    xs, ys = [], []
+    for i in range(len(data) - seq_length):
+        x = data[i:i+seq_length]
+        y = data[i+seq_length]
+        xs.append(x)
+        ys.append(y)
+    return np.array(xs), np.array(ys)
+
+SEQ_LENGTH = 60  # Last 60 days to predict next day
+X, y = create_sequences(close_prices_norm, SEQ_LENGTH)
+
+# Split data (80% train, 20% test)
+split = int(0.8 * len(X))
+X_train, X_test = X[:split], X[split:]
+y_train, y_test = y[:split], y[split:]
+
+# Convert to PyTorch tensors
+X_train = torch.from_numpy(X_train).float()
+y_train = torch.from_numpy(y_train).float()
+
+X_test = torch.from_numpy(X_test).float()
+y_test = torch.from_numpy(y_test).float()
+
+# --- Step 4: Define LSTM and GRU models ---
+class StockLSTM(nn.Module):
+    def __init__(self, input_size=1, hidden_size=50, num_layers=2, output_size=1):
+        super(StockLSTM, self).__init__()
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+        self.linear = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        h0 = torch.zeros(2, x.size(0), 50)
+        c0 = torch.zeros(2, x.size(0), 50)
+        out, _ = self.lstm(x, (h0, c0))
+        out = out[:, -1, :]
+        out = self.linear(out)
+        return out
+
+class StockGRU(nn.Module):
+    def __init__(self, input_size=1, hidden_size=50, num_layers=2, output_size=1):
+        super(StockGRU, self).__init__()
+        self.gru = nn.GRU(input_size, hidden_size, num_layers, batch_first=True)
+        self.linear = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        h0 = torch.zeros(2, x.size(0), 50)
+        out, _ = self.gru(x, h0)
+        out = out[:, -1, :]
+        out = self.linear(out)
+        return out
+
+# Initialize models
+lstm_model = StockLSTM()
+gru_model = StockGRU()
+
+criterion = nn.MSELoss()
+lstm_optimizer = torch.optim.Adam(lstm_model.parameters(), lr=0.001)
+gru_optimizer = torch.optim.Adam(gru_model.parameters(), lr=0.001)
+
+# --- Step 5: Train models ---
+def train_model(model, optimizer, epochs=50):
+    model.train()
+    for epoch in range(epochs):
+        optimizer.zero_grad()
+        output = model(X_train)
+        loss = criterion(output, y_train)
+        loss.backward()
+        optimizer.step()
+
+        if (epoch+1) % 10 == 0:
+            print(f'Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.6f}')
+
+print("\nTraining LSTM model...")
+train_model(lstm_model, lstm_optimizer)
+
+print("\nTraining GRU model...")
+train_model(gru_model, gru_optimizer)
+
+# --- Step 6: Evaluate and print metrics ---
+def evaluate_model(model, model_name="Model"):
+    model.eval()
+    with torch.no_grad():
+        preds = model(X_test).detach().numpy()
+    y_pred = scaler.inverse_transform(preds)
+    y_true = scaler.inverse_transform(y_test.numpy())
+
+    # Calculate metrics
+    mse = mean_squared_error(y_true, y_pred)
+    rmse = np.sqrt(mse)
+    mae = mean_absolute_error(y_true, y_pred)
+    r2 = r2_score(y_true, y_pred)
+
+    print(f"\n{model_name} Performance:")
+    print(f"MSE: {mse:.4f}")
+    print(f"RMSE: {rmse:.4f}")
+    print(f"MAE: {mae:.4f}")
+    print(f"R² Score: {r2:.4f}")
+
+    return y_pred, y_true
+
+lstm_preds, y_test_orig = evaluate_model(lstm_model, "LSTM")
+gru_preds, _ = evaluate_model(gru_model, "GRU")
+
+# --- Step 7: Plot results ---
+plt.figure(figsize=(14,6))
+plt.plot(y_test_orig, label='Actual Price', color='black')
+plt.plot(lstm_preds, label='LSTM Predicted Price', alpha=0.7)
+plt.plot(gru_preds, label='GRU Predicted Price', alpha=0.7)
+plt.title('Mastercard Stock Price Prediction')
+plt.xlabel('Time')
+plt.ylabel('Stock Price')
+plt.legend()
+plt.show()
+
