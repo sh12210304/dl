@@ -1,0 +1,79 @@
+#q6
+# Import necessary libraries
+import tensorflow as tf
+from tensorflow.keras import datasets, layers, models
+from tensorflow.keras.layers import LeakyReLU, Dropout
+import matplotlib.pyplot as plt
+
+# -------------------- Load Fashion-MNIST Dataset --------------------
+(x_train, y_train), (x_test, y_test) = datasets.fashion_mnist.load_data()
+
+# Normalize and reshape
+x_train, x_test = x_train / 255.0, x_test / 255.0
+x_train = x_train.reshape(-1, 28, 28, 1)
+x_test = x_test.reshape(-1, 28, 28, 1)
+
+# -------------------- Build CNN with Dropout --------------------
+model = models.Sequential()
+
+# Conv + LeakyReLU + Dropout
+model.add(layers.Conv2D(32, (3, 3), input_shape=(28, 28, 1)))
+model.add(LeakyReLU(alpha=0.1))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(Dropout(0.25))
+
+model.add(layers.Conv2D(64, (3, 3)))
+model.add(LeakyReLU(alpha=0.1))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(Dropout(0.25))
+
+model.add(layers.Conv2D(64, (3, 3)))
+model.add(LeakyReLU(alpha=0.1))
+model.add(Dropout(0.25))
+
+# Dense layers
+model.add(layers.Flatten())
+model.add(layers.Dense(128))
+model.add(LeakyReLU(alpha=0.1))
+model.add(Dropout(0.5))
+model.add(layers.Dense(10, activation='softmax'))
+
+
+model.compile(optimizer="adam",
+              loss="sparse_categorical_crossentropy",
+              metrics=["accuracy"])
+
+
+model.summary()
+
+# -------------------- Train Model --------------------
+history = model.fit(x_train, y_train, epochs=20,
+                    validation_data=(x_test, y_test),
+                    batch_size=64)
+
+# -------------------- Evaluate Model --------------------
+test_loss, test_acc = model.evaluate(x_test, y_test, verbose=2)
+print(f"\n✅ Test Accuracy with Dropout: {test_acc*100:.2f}%")
+
+# -------------------- Plot Accuracy & Loss --------------------
+plt.figure(figsize=(12, 5))
+
+# Accuracy plot
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'], label='Training Accuracy')
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+plt.title("Model Accuracy (with Dropout)")
+plt.xlabel("Epoch")
+plt.ylabel("Accuracy")
+plt.legend()
+
+# Loss plot
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.title("Model Loss (with Dropout)")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.legend()
+
+plt.show()

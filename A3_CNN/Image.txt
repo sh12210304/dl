@@ -1,0 +1,74 @@
+#q4
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
+from scipy.signal import convolve2d
+
+
+img = Image.open("sample.jpeg").convert("RGB")   # Keep color
+img = img.resize((128, 128))
+img_array = np.array(img)
+
+print("Original image shape:", img_array.shape)
+
+plt.figure(figsize=(4,4))
+plt.imshow(img_array)
+plt.title("Original Image (Color)")
+plt.axis("off")
+plt.show()
+
+# -------------------- Convert to Grayscale for Convolution --------------------
+gray_img = np.array(img.convert("L"))
+
+plt.figure(figsize=(4,4))
+plt.imshow(gray_img, cmap="gray")
+plt.title("Grayscale Image (for CNN)")
+plt.axis("off")
+plt.show()
+
+# -------------------- Kernel --------------------
+kernel = np.array([[ -1, -1, -1],
+                   [ -1,  8, -1],
+                   [ -1, -1, -1]])
+
+print("Kernel Matrix:\n", kernel)
+
+# -------------------- Apply Convolution --------------------
+conv_output = convolve2d(gray_img, kernel, mode='same', boundary='fill', fillvalue=0)
+
+plt.figure(figsize=(4,4))
+plt.imshow(conv_output, cmap="gray")
+plt.title("After Convolution")
+plt.axis("off")
+plt.show()
+
+# -------------------- Apply Activation (ReLU) --------------------
+relu_output = np.maximum(conv_output, 0)
+
+plt.figure(figsize=(4,4))
+plt.imshow(relu_output, cmap="gray")
+plt.title("After ReLU Activation")
+plt.axis("off")
+plt.show()
+
+# -------------------- Apply Pooling (2x2 Max Pooling) --------------------
+def max_pooling(feature_map, size=2, stride=2):
+    h, w = feature_map.shape
+    out_h = h // stride
+    out_w = w // stride
+    pooled = np.zeros((out_h, out_w))
+
+    for i in range(0, h - size + 1, stride):
+        for j in range(0, w - size + 1, stride):
+            pooled[i//stride, j//stride] = np.max(feature_map[i:i+size, j:j+size])
+
+    return pooled
+
+pooled_output = max_pooling(relu_output, size=2, stride=2)
+
+plt.figure(figsize=(4,4))
+plt.imshow(pooled_output, cmap="inferno")
+plt.title("After MaxPooling (2x2)")
+plt.axis("off")
+plt.show()
+
