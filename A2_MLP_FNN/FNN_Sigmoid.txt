@@ -1,0 +1,112 @@
+#q5
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision import datasets, transforms
+from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
+import numpy as np
+import random
+import seaborn as sns
+
+# Step 1: Load MNIST Dataset
+transform = transforms.ToTensor()
+train_dataset = datasets.MNIST(root='./data', train=True, transform=transform, download=True)
+test_dataset  = datasets.MNIST(root='./data', train=False, transform=transform, download=True)
+
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+test_loader  = DataLoader(test_dataset, batch_size=64, shuffle=False)
+
+# Step 2: Explore the Dataset
+print("✅ MNIST Dataset Loaded")
+
+# 2.1 Dataset shape and size
+print(f"Training set size: {len(train_dataset)}")
+print(f"Test set size: {len(test_dataset)}")
+print(f"Image shape: {train_dataset[0][0].shape} (Channels x Height x Width)")
+
+# 2.2 Pixel value range
+pixels = train_dataset.data.numpy()
+print(f"Pixel value range: {pixels.min()} to {pixels.max()}")
+
+# 2.3 Class distribution
+labels = [label for _, label in train_dataset]
+classes, counts = np.unique(labels, return_counts=True)
+print("\n📊 Class Distribution in Training Set:")
+for c, count in zip(classes, counts):
+    print(f"Digit {c}: {count} samples")
+
+# 2.4 Visualize 10 sample images
+plt.figure(figsize=(10, 4))
+for i in range(10):
+    image, label = train_dataset[i]
+    plt.subplot(2, 5, i+1)
+    plt.imshow(image.squeeze(), cmap="gray")
+    plt.title(f"Label: {label}")
+    plt.axis('off')
+plt.suptitle("🔍 Sample Images from MNIST", fontsize=16)
+plt.tight_layout()
+plt.show()
+
+# Step 3: Define Feedforward Neural Network with Sigmoid Activation
+class FeedforwardNN(nn.Module):
+    def __init__(self, input_size=784, hidden_size=128, output_size=10):
+        super(FeedforwardNN, self).__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.sigmoid = nn.Sigmoid()
+        self.fc2 = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        x = x.view(-1, 28*28)
+        x = self.sigmoid(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
+# Step 4: Initialize Model, Loss Function, Optimizer
+model = FeedforwardNN()
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+# Step 5: Random Epoch Calculation
+random_epochs = random.randint(8, 15)
+print(f"\n📅 Training for {random_epochs} random epochs")
+
+# Step 6: Train the Model
+train_losses = []
+
+for epoch in range(random_epochs):
+    running_loss = 0.0
+    for images, labels in train_loader:
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        running_loss += loss.item()
+
+    avg_loss = running_loss / len(train_loader)
+    train_losses.append(avg_loss)
+    print(f"Epoch [{epoch+1}/{random_epochs}] - Loss: {avg_loss:.4f}")
+
+# Step 7: Evaluate the Model
+correct = 0
+total = 0
+with torch.no_grad():
+    for images, labels in test_loader:
+        outputs = model(images)
+        _, predicted = torch.max(outputs.data, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
+
+accuracy = correct / total
+print(f"\n✅ Test Accuracy: {accuracy * 100:.2f}%")
+
+# Step 8: Plot Training Loss
+plt.plot(range(1, random_epochs + 1), train_losses, marker='o')
+plt.title("Training Loss vs Epochs")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.grid(True)
+plt.show()

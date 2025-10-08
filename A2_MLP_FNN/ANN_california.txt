@@ -1,0 +1,131 @@
+#q4 (alternative)
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout, BatchNormalization, Activation
+from tensorflow.keras.optimizers import Adam
+
+# 1. Load the dataset
+df = pd.read_csv('/content/california_housing_train.csv')
+
+# 2. Explore the dataset
+print(" Dataset Info:")
+print(df.info())
+
+print("\nStatistical Summary:")
+print(df.describe())
+
+print("\n Null Values:")
+print(df.isnull().sum())
+
+# 3. Split features and label
+X = df.drop("medianHouseValue", axis=1)
+y = df["medianHouseValue"]
+
+# 4. Split into train and test sets
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42)
+
+# 5. Feature scaling
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+print("\nInput shape:", X_train_scaled.shape)
+
+# 6. Build the ANN model
+model = Sequential([
+    Dense(160, input_shape=(X_train_scaled.shape[1],)),  # input shape explicitly defined
+    BatchNormalization(),
+    Activation('relu'),
+    Dropout(0.3),
+    Dense(1)  # Output layer for regression
+])
+
+# 7. Compile the model
+learning_rate = 0.01
+optimizer = Adam(learning_rate=learning_rate)
+model.compile(optimizer=optimizer, loss='mse', metrics=['mae'])
+
+# 8. Ensure the model is built (optional, but avoids param=0 issue in some cases)
+model.build(input_shape=(None, X_train_scaled.shape[1]))
+
+# 9. Model Summary
+print("\n Model Summary:\n")
+model.summary()
+
+# 10. Train the model
+history = model.fit(
+    X_train_scaled, y_train,
+    validation_split=0.2,
+    epochs=10,                # You can increase this to 20+ for better training
+    batch_size=64,
+    verbose=1
+)
+
+# 11. Evaluate on test data
+test_loss, test_mae = model.evaluate(X_test_scaled, y_test, verbose=0)
+print(f"\n✅ Test MAE: {test_mae:.2f}")
+print(f"✅ Test MSE (Loss): {test_loss:.2f}")
+
+# 12. Make predictions
+y_pred = model.predict(X_test_scaled)
+
+# 13. Performance metrics
+mse = mean_squared_error(y_test, y_pred)
+mae = mean_absolute_error(y_test, y_pred)
+rmse = np.sqrt(mse)
+r2 = r2_score(y_test, y_pred)
+mape = np.mean(np.abs((y_test - y_pred.flatten()) / y_test)) * 100  # %
+
+print(f"\n📊 MAE: {mae:.2f}")
+print(f"📊 MSE: {mse:.2f}")
+print(f"📊 RMSE: {rmse:.2f}")
+print(f"📈 R² Score: {r2:.4f}")
+print(f"📉 MAPE: {mape:.2f}%")
+
+# ---- Overall Accuracy for Regression ----
+# Accuracy within ±10% tolerance
+tolerance_10 = 0.1
+accuracy_within_10 = np.mean(
+    np.abs((y_pred.flatten() - y_test) / y_test) <= tolerance_10
+) * 100
+
+# Accuracy within ±100% tolerance
+tolerance_100 = 1.0
+accuracy_within_100 = np.mean(
+    np.abs((y_pred.flatten() - y_test) / y_test) <= tolerance_100
+) * 100
+
+print(f"\n✅ Model Accuracy (within ±10% tolerance): {accuracy_within_10:.2f}%")
+print(f"✅ Model Accuracy (within ±100% tolerance): {accuracy_within_100:.2f}%")
+print(f"✅ Overall R² Score (acts like accuracy for regression): {r2:.4f}")
+
+
+# 14. Plot actual vs predicted
+plt.figure(figsize=(8, 6))
+plt.scatter(y_test, y_pred, alpha=0.5, color='blue')
+plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--')
+plt.xlabel("Actual Median House Value")
+plt.ylabel("Predicted Median House Value")
+plt.title("📈 Actual vs Predicted Values")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# 15. Plot loss over epochs
+plt.figure(figsize=(8, 5))
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.xlabel("Epochs")
+plt.ylabel("MSE Loss")
+plt.title("📉 Training and Validation Loss")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
